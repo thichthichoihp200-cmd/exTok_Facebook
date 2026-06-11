@@ -2,95 +2,158 @@ import requests
 import os
 import time
 import json
-from colorama import Fore, init
+import subprocess
+import re
+from colorama import Fore, Style, init
 
+# Khởi tạo màu sắc
 init(autoreset=True)
 
-CONFIG_FILE = "accounts.json"
-BASE_URL = "https://api.extok.net/api/v3"
+# --- CÁC TÊN FILE ĐÃ ĐƯỢC ĐỔI ---
+CONFIG_FILE = "config_exTok.json"
+ERROR_FILE = "error_jobs_exTok.json"
+BASE_URL = "https://api.extok.net/api"
 
-def load_data():
+# --- HÀM HỖ TRỢ MÀU SẮC ---
+def print_header(text):
+    print(Fore.MAGENTA + Style.BRIGHT + f"\n=== {text} ===")
+
+def print_success(text):
+    print(Fore.GREEN + Style.BRIGHT + f"[✅] {text}")
+
+def print_error(text):
+    print(Fore.RED + Style.BRIGHT + f"[!] {text}")
+
+# --- QUẢN LÝ CẤU HÌNH ---
+def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
             try: return json.load(f)
-            except: return {}
-    return {}
+            except: return {"TOKEN": "", "ACCOUNTS": {}}
+    return {"TOKEN": "", "ACCOUNTS": {}}
 
-def save_data(data):
+def save_config(data):
     with open(CONFIG_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def main():
-    data = load_data()
-    
-    print(Fore.CYAN + "\n--- QUẢN LÝ TÀI KHOẢN ---")
-    keys = list(data.keys())
-    print("1. Chọn Key đã lưu\n2. Nhập Key mới")
-    menu_choice = input("Lựa chọn (1/2): ")
-    
-    if menu_choice == '2':
-        API_KEY = input("Nhập API Key mới: ").strip()
-        if API_KEY not in data: data[API_KEY] = []
-    else:
-        if not keys: print(Fore.RED + "Chưa có Key!"); return
-        for i, k in enumerate(keys): print(f"{i+1}. Key: {k[:5]}****")
-        idx = int(input("Chọn số thứ tự Key: ")) - 1
-        API_KEY = keys[idx]
+# --- QUẢN LÝ JOB LỖI ---
+def load_error_jobs():
+    if os.path.exists(ERROR_FILE):
+        with open(ERROR_FILE, "r") as f:
+            try: return json.load(f)
+            except: return []
+    return []
 
-    accs = data[API_KEY]
-    print(Fore.CYAN + f"\n--- TÀI KHOẢN CỦA KEY {API_KEY[:5]}**** ---")
-    for i, acc in enumerate(accs): 
-        print(f"{i+1}. [{acc['name']}] FB_ID: {acc['fb_id']} | App: {acc['package']}")
-    print(f"{len(accs)+1}. Thêm tài khoản mới")
-    
-    choice_acc = int(input("Chọn tài khoản để chạy: ")) - 1
-    
-    if choice_acc == len(accs):
-        new_name = input("Nhập tên hiển thị: ").strip()
-        new_id = input("Nhập FB_ID: ").strip()
-        new_pkg = input("Nhập Package Name (VD: mark.via.gq): ").strip()
-        data[API_KEY].append({"name": new_name, "fb_id": new_id, "package": new_pkg})
-        save_data(data)
-        selected = data[API_KEY][-1]
-    else:
-        selected = accs[choice_acc]
+def save_error_job(job_id):
+    errors = load_error_jobs()
+    if job_id not in errors:
+        errors.append(job_id)
+        with open(ERROR_FILE, "w") as f:
+            json.dump(errors, f)
 
-    NAME = selected['name']
-    FB_ID = selected['fb_id']
-    PACKAGE = selected['package']
+def extract_uid(url_or_uid):
+    patterns = [r"id=(\d+)", r"facebook\.com/(\d+)"]
+    for pattern in patterns:
+        match = re.search(pattern, url_or_uid)
+        if match:
+            return match.group(1)
+    return url_or_uid.strip()
 
+# --- HÀM XỬ LÝ JOB ---
+def run_jobs(headers, uid, package):
+    print_header(f"ĐANG CHẠY JOB CHO UID: {uid}")
+    print(Fore.YELLOW + f"Trình duyệt: {package}")
+    
     while True:
-        params = {"key": API_KEY, "fb_id": FB_ID, "type": "like", "limit": 1}
         try:
-            job_data = requests.get(f"{BASE_URL}/facebook-jobs", params=params, timeout=10).json()
-        except: job_data = None
-        
-        if job_data and job_data.get("status") == 200 and len(job_data.get("data", [])) > 0:
-            os.system('clear')
-            job = job_data["data"][0]
-            print(Fore.CYAN + "--- ĐANG LÀM JOB ---")
-            # Hiển thị Tên + ID + Loại Job + Xu
-            print(Fore.GREEN + f"Tài khoản: {NAME} ({FB_ID})")
-            print(Fore.YELLOW + f"[+] Loại: {job['type'].upper()} | Xu: {job.get('fix_coin_job', 0)}")
+            params = {"fb_id": uid, "limit": 1}
+            res = requests.get(f"{BASE_URL}/facebook-jobs", params=params, headers=headers, timeout=10).json()
             
-            time.sleep(1)
-            os.system(f'am start -n {PACKAGE}/mark.via.Shell -a android.intent.action.VIEW -d "{job["link"]}" > /dev/null 2>&1')
-            
-            confirm = input(Fore.MAGENTA + "=> Enter (Hoàn thành) | n (Bỏ qua): ").strip().lower()
-            
-            if confirm != 'n':
-                payload = {"key": API_KEY, "job_id": job['id'], "fb_id": FB_ID, "success": True}
-                res = requests.post(f"{BASE_URL}/facebook-jobs/complete", data=payload).json()
-                print(Fore.GREEN + f"[SUCCESS] {res.get('message')}")
+            if res.get("status") == 200 and res.get("data"):
+                job = res["data"][0]
+                job_id = job['id']
+                
+                # Kiểm tra job lỗi
+                if job_id in load_error_jobs():
+                    print(Fore.RED + f"[-] Job {job_id} đã nằm trong danh sách lỗi, đang bỏ qua...")
+                    requests.post(f"{BASE_URL}/facebook-jobs/skip", json={"job_id": job_id, "fb_id": uid}, headers=headers)
+                    time.sleep(2)
+                    continue
+
+                print(Fore.GREEN + f"\n=> Loại Job: {job['type']} | Link: {job['link']}")
+                print(Fore.YELLOW + ">>> Đang chờ 2 giây để mở trình duyệt...", end="\r")
+                time.sleep(2)
+                
+                subprocess.run(['am', 'start', '-n', f'{package}/mark.via.Shell', '-a', 'android.intent.action.VIEW', '-d', job["link"]],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                choice = input(Fore.MAGENTA + "\n[Enter] Hoàn thành | [n] Bỏ qua | [x] Lỗi & Bỏ qua | [q] Thoát: ").lower()
+                
+                if choice == 'q': break
+                
+                if choice == 'x':
+                    save_error_job(job_id)
+                    requests.post(f"{BASE_URL}/facebook-jobs/complete", json={"job_id": job_id, "uid": uid, "success": False}, headers=headers)
+                    print_error("Đã lưu job lỗi vào danh sách đen.")
+                elif choice == 'n':
+                    requests.post(f"{BASE_URL}/facebook-jobs/skip", json={"job_id": job_id, "fb_id": uid}, headers=headers)
+                else:
+                    resp = requests.post(f"{BASE_URL}/facebook-jobs/complete", json={"job_id": job_id, "uid": uid, "success": True}, headers=headers).json()
+                    
+                    if resp.get('status') == 200:
+                        msg = resp.get('message', 'Thành công')
+                        coin = resp.get('data', {}).get('coin', '0')
+                        total = resp.get('coin_statistics', {}).get('current_coin', '0')
+                        count = resp.get('count_jobs_today', '0')
+                        
+                        print_success(f"{msg}")
+                        print(Fore.YELLOW + "--- THỐNG KÊ ---")
+                        print(Fore.CYAN + f"Xu cộng: {coin} | Tổng xu: {total} | Job hôm nay: {count}")
+                    else:
+                        print_error(f"Lỗi từ server: {resp.get('message')}")
             else:
-                payload = {"key": API_KEY, "job_id": job['id'], "fb_id": FB_ID}
-                res = requests.post(f"{BASE_URL}/facebook-jobs/skip", data=payload).json()
-                print(Fore.YELLOW + f"[SKIP] {res.get('message')}")
+                print(Fore.WHITE + "Chưa có job, đợi 30s...", end="\r")
+                time.sleep(30)
+        except Exception as e:
+            print_error(f"Lỗi hệ thống: {e}")
+            time.sleep(10)
+
+# --- HÀM MAIN ---
+def main():
+    data = load_config()
+    if not data["TOKEN"]:
+        data["TOKEN"] = input(Fore.YELLOW + "Nhập JWT Token: ").strip()
+        save_config(data)
+    
+    while True:
+        print_header("QUẢN LÝ TÀI KHOẢN")
+        print(f"{Fore.CYAN}1.{Style.RESET_ALL} Thêm tài khoản | {Fore.CYAN}2.{Style.RESET_ALL} Chọn làm Job | {Fore.CYAN}3.{Style.RESET_ALL} Thoát")
+        c = input("Chọn: ")
+        
+        if c == '1':
+            input_val = input("Nhập Link hoặc UID: ").strip()
+            uid = extract_uid(input_val)
+            pkg = input("Nhập Package Name (ví dụ: mark.via.gp): ").strip()
+            data["ACCOUNTS"][uid] = pkg
+            save_config(data)
+            print_success(f"Đã thêm: {uid}")
+        elif c == '2':
+            keys = list(data["ACCOUNTS"].keys())
+            for i, uid in enumerate(keys, 1): 
+                print(f"{Fore.YELLOW}{i}.{Style.RESET_ALL} {uid} -> {Fore.GREEN}{data['ACCOUNTS'][uid]}")
             
-            time.sleep(1.5)
-        else:
-            print(Fore.WHITE + "[-] Chưa có job, chờ 30 giây...          ", end="\r")
-            time.sleep(30)
+            c_in = input("Chọn STT hoặc dán Link Facebook: ").strip()
+            # Xử lý chọn
+            if c_in.isdigit() and int(c_in) <= len(keys):
+                uid = keys[int(c_in)-1]
+            else:
+                uid = extract_uid(c_in)
+            
+            if uid in data["ACCOUNTS"]:
+                run_jobs({"Authorization": f"Bearer {data['TOKEN']}", "Content-Type": "application/json"}, uid, data["ACCOUNTS"][uid])
+            else:
+                print_error("Không tìm thấy tài khoản!")
+        elif c == '3': break
 
 if __name__ == "__main__":
     main()
