@@ -5,6 +5,7 @@ import json
 import subprocess
 import re
 import random
+import sys
 from colorama import Fore, Style, init
 
 # Khởi tạo màu sắc
@@ -61,7 +62,7 @@ def extract_uid(url_or_uid):
 # --- HÀM XỬ LÝ JOB ---
 def run_jobs(headers, uid, package, delay_min, delay_max):
     print_header(f"ĐANG CHẠY JOB CHO UID: {uid}")
-    print(Fore.CYAN + f"Chế độ: Tự động hoàn thành sau {delay_min}-{delay_max}s")
+    print(Fore.CYAN + "Điều khiển: [Enter] Hoàn thành | [n] Bỏ qua | [x] Báo lỗi (Lưu vĩnh viễn)")
     
     while True:
         try:
@@ -72,7 +73,9 @@ def run_jobs(headers, uid, package, delay_min, delay_max):
                 job = res["data"][0]
                 job_id = job['id']
                 
+                # Kiểm tra danh sách lỗi
                 if job_id in load_error_jobs():
+                    print(Fore.RED + f"Job {job_id} đã nằm trong danh sách lỗi, đang bỏ qua...")
                     requests.post(f"{BASE_URL}/facebook-jobs/skip", json={"job_id": job_id, "fb_id": uid}, headers=headers)
                     continue
 
@@ -82,19 +85,26 @@ def run_jobs(headers, uid, package, delay_min, delay_max):
                 subprocess.run(['am', 'start', '-n', f'{package}/mark.via.Shell', '-a', 'android.intent.action.VIEW', '-d', job["link"]],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                # Tự động chờ
-                wait_time = random.randint(delay_min, delay_max)
-                print(Fore.YELLOW + f">>> Đang thực hiện Job... chờ {wait_time}s rồi tự động xác nhận.")
-                time.sleep(wait_time)
+                # Chờ người dùng tương tác
+                user_action = input(Fore.YELLOW + "\nNhập lệnh ([Enter]: Xong, [n]: Bỏ qua, [x]: Báo lỗi): ").strip().lower()
                 
-                # Tự động xác nhận thành công
-                resp = requests.post(f"{BASE_URL}/facebook-jobs/complete", json={"job_id": job_id, "uid": uid, "success": True}, headers=headers).json()
-                
-                if resp.get('status') == 200:
-                    coin = resp.get('data', {}).get('coin', '0')
-                    print_success(f"Hoàn thành! Xu cộng: {coin}")
+                if user_action == 'x':
+                    save_error_job(job_id)
+                    print_error(f"Đã lưu Job {job_id} vào danh sách lỗi!")
+                    continue
+                elif user_action == 'n':
+                    requests.post(f"{BASE_URL}/facebook-jobs/skip", json={"job_id": job_id, "fb_id": uid}, headers=headers)
+                    print(Fore.RED + "Đã bỏ qua job này.")
+                    continue
                 else:
-                    print_error(f"Lỗi từ server: {resp.get('message')}")
+                    # Mặc định là hoàn thành
+                    resp = requests.post(f"{BASE_URL}/facebook-jobs/complete", json={"job_id": job_id, "uid": uid, "success": True}, headers=headers).json()
+                    
+                    if resp.get('status') == 200:
+                        coin = resp.get('data', {}).get('coin', '0')
+                        print_success(f"Hoàn thành! Xu cộng: {coin}")
+                    else:
+                        print_error(f"Lỗi từ server: {resp.get('message')}")
                     
             else:
                 print(Fore.WHITE + "Chưa có job, đợi 30s...", end="\r")
@@ -126,13 +136,15 @@ def main():
             print_success("Đã lưu tài khoản!")
         elif c == '2':
             keys = list(data["ACCOUNTS"].keys())
+            if not keys:
+                print_error("Chưa có tài khoản nào!")
+                continue
             print(f"{Fore.CYAN}Danh sách tài khoản đã lưu:")
             for i, uid in enumerate(keys, 1): 
                 print(f"{i}. {uid}")
             
             user_input = input("Chọn STT hoặc dán Link/UID: ").strip()
             
-            # Xử lý chọn bằng STT hoặc dán Link
             if user_input.isdigit() and int(user_input) <= len(keys):
                 target_uid = keys[int(user_input) - 1]
             else:
