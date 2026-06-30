@@ -79,7 +79,13 @@ def run_jobs(headers, uid, pkg, act):
                 else:
                     resp = requests.post(f"{BASE_URL}/facebook-jobs/complete", json={"job_id": job['id'], "uid": uid, "success": True}, headers=headers).json()
                     if resp.get('status') == 200:
-                        print(Fore.GREEN + "✔ Xác nhận thành công!")
+                        stats = resp.get("coin_statistics", {})
+                        current_coin = stats.get("current_coin", "0")
+                        pending_today = stats.get("coin_pending_today", "0")
+                        
+                        print(Fore.GREEN + f"✔ Xác nhận thành công!")
+                        print(Fore.WHITE + f"   - Số dư hiện tại: {Fore.YELLOW}{current_coin} coin")
+                        print(Fore.WHITE + f"   - Đang chờ duyệt hôm nay: {Fore.CYAN}{pending_today} coin")
                     else:
                         print(Fore.RED + "✘ Lỗi xác nhận với Server.")
             else:
@@ -97,7 +103,6 @@ def main():
     print("1. Chạy Job tự động")
     if input("Chọn: ") == '1':
         accounts = fetch_extok_accounts(headers)
-        # Hiển thị danh sách với màu sắc
         for i, acc in enumerate(accounts, 1):
             name = acc.get('facebook_name', 'Unknown')
             uid = acc.get('fb_id', 'N/A')
